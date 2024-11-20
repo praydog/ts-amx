@@ -8,6 +8,8 @@
 #define MAX_PLAYERS 32
 #define MAX_RECORDING_DURATION 2048
 
+new const HUD_CHANNEL = 4;
+
 enum {
     RECORD_BUTTONS,
     RECORD_OLD_BUTTONS,
@@ -41,6 +43,11 @@ enum {
     RECORD_VEC_USER4_Y,
     RECORD_VEC_USER4_Z,
 
+    RECORD_FL_USER1,
+    RECORD_FL_USER2,
+    RECORD_FL_USER3,
+    RECORD_FL_USER4,
+
     RECORD_COUNT
 }
 
@@ -72,6 +79,43 @@ public plugin_init() {
     RegisterHam(Ham_TakeDamage, "player", "OnTakeDamage");
     register_forward(FM_CmdStart, "CmdStart");
     register_forward(FM_PlayerPreThink, "PlayerPreThink");
+    register_forward(FM_PlayerPostThink, "PlayerPostThink");
+
+    RegisterHam(Ham_Spawn, "player", "OnPlayerSpawn");
+}
+
+new const messages[][] = {
+    "/savepos, /restorepos - Save and restore your position",
+    "/record, /replay - Record and replay your movement",
+    "/nocollide, /collide - Enable/disable player collisions",
+    "/speedboost - Toggle max speed cap when jumping"
+};
+
+public WelcomeHud(params[]) {
+    if (!is_user_connected(params[0])) {
+        return;
+    }
+
+    new Float:x = 0.5;
+    new Float:y = 0.6;
+
+    for (new i = 0; i < sizeof messages; i++) {
+        set_hudmessage(255, 255, 255, x, y, 0, 0.1, 0.1, 0.0, 0.0, -1);
+        show_hudmessage(params[0], messages[i]);
+        y += 0.01; // Move down for the next message
+    }
+}
+
+public OnPlayerSpawn(id) {
+    for (new i = 0; i < sizeof messages; i++) {
+        client_print(id, print_chat, messages[i]);
+    }
+
+    new parameters[1];
+    parameters[0] = id;
+    set_task(0.1, "WelcomeHud", id, parameters, sizeof(parameters), "a", 100);
+
+    return HAM_HANDLED;
 }
 
 new bool:g_god_mode_enabled[33]; // Array to store god mode status for each player
@@ -107,7 +151,7 @@ public PrintPlayerPosition(id) {
     new msg[128];
     new user_name[64];
     get_user_name(id, user_name, 63);
-    new len = format(msg, 128, "Player %s is at position: X: %f, Y: %f, Z: %f",
+    format(msg, 128, "Player %s is at position: X: %f, Y: %f, Z: %f",
              user_name, playerPos[0], playerPos[1], playerPos[2]);
 
     // Print the message to all players
@@ -199,8 +243,6 @@ public EnablePlayerCollision(id) {
     client_print(id, print_chat, "Collisions enabled!");
     return PLUGIN_HANDLED;
 }
-
-new const HUD_CHANNEL = 4; // Use a specific HUD channel for messages
 
 public ShowVelocityHUD(id) {
     new Float:velocity[3];
@@ -343,7 +385,7 @@ public RecordEntity(id) {
     g_usercmd_recordings[id][index][RECORD_OLD_BUTTONS] = entity_get_int(id, EV_INT_oldbuttons);
     g_usercmd_recordings[id][index][RECORD_ENT_FLAGS] = entity_get_int(id, EV_INT_flags);
 
-    new movedir[3];
+    new Float:movedir[3];
     /*g_usercmd_recordings[id][index][1] = get_uc(uc_handle, UC_ForwardMove);
     g_usercmd_recordings[id][index][2] = get_uc(uc_handle, UC_SideMove);
     g_usercmd_recordings[id][index][3] = get_uc(uc_handle, UC_UpMove);*/
@@ -353,7 +395,7 @@ public RecordEntity(id) {
     g_usercmd_recordings[id][index][RECORD_MOVEDIR_Y] = movedir[1];
     g_usercmd_recordings[id][index][RECORD_MOVEDIR_Z] = movedir[2];
     
-    new angles[3];
+    new Float:angles[3];
     /*get_uc(uc_handle, UC_ViewAngles, angles); 
     g_usercmd_recordings[id][index][4] = angles[0];
     g_usercmd_recordings[id][index][5] = angles[1];
@@ -371,21 +413,21 @@ public RecordEntity(id) {
     g_usercmd_recordings[id][index][RECORD_V_ANGLE_Y] = angles[1];
     g_usercmd_recordings[id][index][RECORD_V_ANGLE_Z] = angles[2];
 
-    new pos[3];
+    new Float:pos[3];
     entity_get_vector(id, EV_VEC_origin, pos);
 
     g_usercmd_recordings[id][index][RECORD_POS_X] = pos[0];
     g_usercmd_recordings[id][index][RECORD_POS_Y] = pos[1];
     g_usercmd_recordings[id][index][RECORD_POS_Z] = pos[2];
 
-    new vel[3];
+    new Float:vel[3];
     fm_get_user_velocity(id, vel);
 
     g_usercmd_recordings[id][index][RECORD_VEL_X] = vel[0];
     g_usercmd_recordings[id][index][RECORD_VEL_Y] = vel[1];
     g_usercmd_recordings[id][index][RECORD_VEL_Z] = vel[2];
 
-    new vec_temp[3];
+    new Float:vec_temp[3];
 
     entity_get_vector(id, EV_VEC_vuser1, vec_temp);
     g_usercmd_recordings[id][index][RECORD_VEC_USER1_X] = vec_temp[0];
@@ -407,12 +449,17 @@ public RecordEntity(id) {
     g_usercmd_recordings[id][index][RECORD_VEC_USER4_Y] = vec_temp[1];
     g_usercmd_recordings[id][index][RECORD_VEC_USER4_Z] = vec_temp[2];
 
+    g_usercmd_recordings[id][index][RECORD_FL_USER1] = entity_get_float(id, EV_FL_fuser1);
+    g_usercmd_recordings[id][index][RECORD_FL_USER2] = entity_get_float(id, EV_FL_fuser2);
+    g_usercmd_recordings[id][index][RECORD_FL_USER3] = entity_get_float(id, EV_FL_fuser3);
+    g_usercmd_recordings[id][index][RECORD_FL_USER4] = entity_get_float(id, EV_FL_fuser4);
+
 
 
     g_recording_durations[id] = index + 1;
 }
 
-public ReplayEntity(id) {
+public ReplayEntity(id, bool:in_post) {
     if (IsRecording(id) || !IsReplaying(id)) {
         return;
     }
@@ -442,17 +489,18 @@ public ReplayEntity(id) {
     entity_set_int(id, EV_INT_oldbuttons, g_usercmd_recordings[id][index][RECORD_OLD_BUTTONS]);
     entity_set_int(id, EV_INT_flags, g_usercmd_recordings[id][index][RECORD_ENT_FLAGS]);
 
-    new movedir[3];
+    new Float:movedir[3];
     movedir[0] = g_usercmd_recordings[id][index][RECORD_MOVEDIR_X];
     movedir[1] = g_usercmd_recordings[id][index][RECORD_MOVEDIR_Y];
     movedir[2] = g_usercmd_recordings[id][index][RECORD_MOVEDIR_Z];
 
     entity_set_vector(id, EV_VEC_movedir, movedir);
 
-    new angles[3];
+    new Float:angles[3];
     angles[0] = g_usercmd_recordings[id][index][RECORD_ANGLES_X];
     angles[1] = g_usercmd_recordings[id][index][RECORD_ANGLES_Y];
     angles[2] = g_usercmd_recordings[id][index][RECORD_ANGLES_Z];
+
 
     //set_uc(uc_handle, UC_ViewAngles, angles);
     entity_set_vector(id, EV_VEC_angles, angles);
@@ -460,17 +508,31 @@ public ReplayEntity(id) {
     angles[0] = g_usercmd_recordings[id][index][RECORD_V_ANGLE_X];
     angles[1] = g_usercmd_recordings[id][index][RECORD_V_ANGLE_Y];
     angles[2] = g_usercmd_recordings[id][index][RECORD_V_ANGLE_Z];
-
     entity_set_vector(id, EV_VEC_v_angle, angles);
 
-    new pos[3];
+    // Send the SVC_SETANGLE message
+    // We dont set EV_INT_fixangle because it causes bugs
+    if (!in_post) {
+        new pitch = floatmul(angles[0] + 360.0, 65536.0 / 360.0);
+        new yaw = floatmul(angles[1] + 360.0, 65536.0 / 360.0);
+        new short_pitch = floatround(pitch);
+        new short_yaw = floatround(yaw);
+
+        message_begin(MSG_ONE_UNRELIABLE, SVC_SETANGLE, _, id);
+        write_short(short_pitch);
+        write_short(short_yaw); // Yaw (left/right)
+        write_short(0); // Roll (tilt)
+        message_end();
+    }
+
+    new Float:pos[3];
     pos[0] = g_usercmd_recordings[id][index][RECORD_POS_X];
     pos[1] = g_usercmd_recordings[id][index][RECORD_POS_Y];
     pos[2] = g_usercmd_recordings[id][index][RECORD_POS_Z];
 
     entity_set_vector(id, EV_VEC_origin, pos);
 
-    new vel[3];
+    new Float:vel[3];
     vel[0] = g_usercmd_recordings[id][index][RECORD_VEL_X];
     vel[1] = g_usercmd_recordings[id][index][RECORD_VEL_Y];
     vel[2] = g_usercmd_recordings[id][index][RECORD_VEL_Z];
@@ -498,6 +560,11 @@ public ReplayEntity(id) {
     vec_temp[1] = g_usercmd_recordings[id][index][RECORD_VEC_USER4_Y];
     vec_temp[2] = g_usercmd_recordings[id][index][RECORD_VEC_USER4_Z];
     entity_set_vector(id, EV_VEC_vuser4, vec_temp);
+
+    entity_set_float(id, EV_FL_fuser1, g_usercmd_recordings[id][index][RECORD_FL_USER1]);
+    entity_set_float(id, EV_FL_fuser2, g_usercmd_recordings[id][index][RECORD_FL_USER2]);
+    entity_set_float(id, EV_FL_fuser3, g_usercmd_recordings[id][index][RECORD_FL_USER3]);
+    entity_set_float(id, EV_FL_fuser4, g_usercmd_recordings[id][index][RECORD_FL_USER4]);
 
     g_current_replay_indices[id] = index + 1;
 }
@@ -568,7 +635,7 @@ public CmdStart(id, cmd, random_seed) {
 
     //RecordUserCmd(id, cmd, random_seed); 
 
-    if (g_is_replaying[id]) {
+    if (IsReplaying(id)) {
         return FMRES_SUPERCEDE;
     }
 
@@ -586,7 +653,23 @@ public PlayerPreThink(id) {
     if (IsRecording(id)) {
         RecordEntity(id);
     } else if (IsReplaying(id)) {
-        ReplayEntity(id);
+        ReplayEntity(id, false);
+    }
+
+    return FMRES_IGNORED;
+}
+
+public PlayerPostThink(id) {
+    if (!is_user_alive(id)) {
+        return FMRES_IGNORED;
+    }
+
+    if (IsReplaying(id)) {
+        if (g_current_replay_indices[id] > 0) {
+            g_current_replay_indices[id]--;
+
+            ReplayEntity(id, true);
+        }
     }
 
     return FMRES_IGNORED;
