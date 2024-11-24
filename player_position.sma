@@ -61,6 +61,8 @@ new g_record_start_ticks[MAX_PLAYERS + 1];
 new g_replay_start_ticks[MAX_PLAYERS + 1];
 new g_recording_durations[MAX_PLAYERS + 1];
 new g_current_replay_indices[MAX_PLAYERS + 1];
+new bool:g_replay_reverse[MAX_PLAYERS + 1];
+new bool:g_replay_pause[MAX_PLAYERS + 1];
 
 // This function is called when the plugin is loaded
 public plugin_init() {
@@ -75,6 +77,10 @@ public plugin_init() {
     register_clcmd("say /god", "ToggleGodMode");
     register_clcmd("say /record", "InitializeRecording");
     register_clcmd("say /replay", "InitializeReplay");
+    register_clcmd("say /replayreverse", "InitializeReplayReverse");
+    register_clcmd("say /replaypause", "PauseReplay");
+    //register_clcmd("say /copyreplay", "CopyReplay");
+    register_clcmd("say", "OnSay");
 
     RegisterHam(Ham_TakeDamage, "player", "OnTakeDamage");
     register_forward(FM_CmdStart, "CmdStart");
@@ -82,6 +88,25 @@ public plugin_init() {
     register_forward(FM_PlayerPostThink, "PlayerPostThink");
 
     RegisterHam(Ham_Spawn, "player", "OnPlayerSpawn");
+}
+
+public OnSay(id) {
+    new txt[128];
+    if (read_argv(1, txt, charsmax(txt)) == 0) {
+        return PLUGIN_CONTINUE;
+    }
+
+    if (equali(txt, "/copyreplay")) {
+        if (read_argv(2, txt, charsmax(txt)) == 0) {
+            client_print(id, print_chat, "Usage: /copyreplay <player_name>");
+            return PLUGIN_CONTINUE;
+        }
+
+        CopyReplay(id, txt);
+        return PLUGIN_HANDLED;
+    }
+
+    return PLUGIN_CONTINUE;
 }
 
 new const messages[][] = {
@@ -289,12 +314,16 @@ public StopRecording(id) {
     g_record_start_ticks[id] = 0;
 }
 
-public IsRecording(id) {
+public bool:IsRecording(id) {
     return g_is_recording[id];
 }
 
-public IsReplaying(id) {
+public bool:IsReplaying(id) {
     return g_is_replaying[id];
+}
+
+public bool:IsReplayingReverse(id) {
+    return g_replay_reverse[id];
 }
 
 public InitializeRecording(id) {
@@ -321,31 +350,111 @@ public InitializeRecording(id) {
     return PLUGIN_HANDLED;
 }
 
-public InitializeReplay(id) {
+public InitializeReplayImpl(id) {
     if (!is_user_alive(id)) {
         client_print(id, print_chat, "You must be alive to replay.");
-        return PLUGIN_HANDLED;
+        return false;
     }
 
     StopRecording(id);
 
-    if (IsReplaying(id)) {
-        client_print(id, print_chat, "Already replaying!");
-        return PLUGIN_HANDLED;
-    }
-
     if (g_recording_durations[id] == 0) {
         client_print(id, print_chat, "No recording found!");
-        return PLUGIN_HANDLED;
+        return false;
     }
+
+    new was_replaying_reverse = IsReplayingReverse(id);
 
     g_is_replaying[id] = true;
     g_is_recording[id] = false;
+    g_replay_reverse[id] = false;
     g_record_start_ticks[id] = 0;
     g_replay_start_ticks[id] = 0;
-    g_current_replay_indices[id] = 0;
+    g_replay_pause[id] = false;
+
+    if (was_replaying_reverse) {
+        g_current_replay_indices[id] = g_recording_durations[id] - g_current_replay_indices[id];
+    } else {
+        g_current_replay_indices[id] = 0;
+    }
 
     client_print(id, print_chat, "Replay initialized!");
+
+    return true;
+}
+
+public InitializeReplay(id) {
+    if (!InitializeReplayImpl(id)) {
+        return PLUGIN_HANDLED;
+    }
+
+    return PLUGIN_HANDLED;
+}
+
+public InitializeReplayReverse(id) {
+    new previous_replay_index = g_current_replay_indices[id];
+    if (!IsReplaying(id)) {
+        previous_replay_index = 0;
+    }
+    if (!InitializeReplayImpl(id)) {
+        return PLUGIN_HANDLED;
+    }
+
+    g_replay_reverse[id] = true;
+    if (previous_replay_index > 0) {
+        g_current_replay_indices[id] = g_recording_durations[id] - previous_replay_index;
+    }
+    return PLUGIN_HANDLED;
+}
+
+public PauseReplay(id) {
+    if (!IsReplaying(id)) {
+        return PLUGIN_HANDLED;
+    }
+
+    g_replay_pause[id] = !g_replay_pause[id];
+
+    if (g_replay_pause[id]) {
+        client_print(id, print_chat, "Replay paused!");
+    } else {
+        client_print(id, print_chat, "Replay resumed!");
+    }
+
+    return PLUGIN_HANDLED;
+}
+
+public CopyReplay(id, target_name[]) {
+    if (!is_user_connected(id) || !is_user_alive(id)) {
+        client_print(id, print_chat, "You must be alive to use this command.");
+        return PLUGIN_HANDLED;
+    }
+
+    client_print(id, print_chat, "Attempting to copy replay from %s", target_name);
+
+    // Find the target player by name
+    new target = find_player("al", target_name);
+    if (!target || !is_user_connected(target)) {
+        client_print(id, print_chat, "Target player not found.");
+        return PLUGIN_HANDLED;
+    }
+
+    if (g_recording_durations[target] == 0) {
+        client_print(id, print_chat, "Target player has no recording.");
+        return PLUGIN_HANDLED;
+    }
+
+    if (IsRecording(target)) {
+        client_print(id, print_chat, "Target player is currently recording.");
+        return PLUGIN_HANDLED;
+    }
+
+    for (new i = 0; i < g_recording_durations[target]; i++) {
+        for (new j = 0; j < USERCMD_ELEMENTS; j++) {
+            g_usercmd_recordings[id][i][j] = g_usercmd_recordings[target][i][j];
+        }
+    }
+
+    g_recording_durations[id] = g_recording_durations[target];
 
     return PLUGIN_HANDLED;
 }
@@ -391,9 +500,9 @@ public RecordEntity(id) {
     g_usercmd_recordings[id][index][3] = get_uc(uc_handle, UC_UpMove);*/
     entity_get_vector(id, EV_VEC_movedir, movedir);
 
-    g_usercmd_recordings[id][index][RECORD_MOVEDIR_X] = movedir[0];
-    g_usercmd_recordings[id][index][RECORD_MOVEDIR_Y] = movedir[1];
-    g_usercmd_recordings[id][index][RECORD_MOVEDIR_Z] = movedir[2];
+    g_usercmd_recordings[id][index][RECORD_MOVEDIR_X] = _:movedir[0];
+    g_usercmd_recordings[id][index][RECORD_MOVEDIR_Y] = _:movedir[1];
+    g_usercmd_recordings[id][index][RECORD_MOVEDIR_Z] = _:movedir[2];
     
     new Float:angles[3];
     /*get_uc(uc_handle, UC_ViewAngles, angles); 
@@ -403,58 +512,56 @@ public RecordEntity(id) {
 
     entity_get_vector(id, EV_VEC_angles, angles);
 
-    g_usercmd_recordings[id][index][RECORD_ANGLES_X] = angles[0];
-    g_usercmd_recordings[id][index][RECORD_ANGLES_Y] = angles[1];
-    g_usercmd_recordings[id][index][RECORD_ANGLES_Z] = angles[2];
+    g_usercmd_recordings[id][index][RECORD_ANGLES_X] = _:angles[0];
+    g_usercmd_recordings[id][index][RECORD_ANGLES_Y] = _:angles[1];
+    g_usercmd_recordings[id][index][RECORD_ANGLES_Z] = _:angles[2];
 
     entity_get_vector(id, EV_VEC_v_angle, angles);
 
-    g_usercmd_recordings[id][index][RECORD_V_ANGLE_X] = angles[0];
-    g_usercmd_recordings[id][index][RECORD_V_ANGLE_Y] = angles[1];
-    g_usercmd_recordings[id][index][RECORD_V_ANGLE_Z] = angles[2];
+    g_usercmd_recordings[id][index][RECORD_V_ANGLE_X] = _:angles[0];
+    g_usercmd_recordings[id][index][RECORD_V_ANGLE_Y] = _:angles[1];
+    g_usercmd_recordings[id][index][RECORD_V_ANGLE_Z] = _:angles[2];
 
     new Float:pos[3];
     entity_get_vector(id, EV_VEC_origin, pos);
 
-    g_usercmd_recordings[id][index][RECORD_POS_X] = pos[0];
-    g_usercmd_recordings[id][index][RECORD_POS_Y] = pos[1];
-    g_usercmd_recordings[id][index][RECORD_POS_Z] = pos[2];
+    g_usercmd_recordings[id][index][RECORD_POS_X] = _:pos[0];
+    g_usercmd_recordings[id][index][RECORD_POS_Y] = _:pos[1];
+    g_usercmd_recordings[id][index][RECORD_POS_Z] = _:pos[2];
 
     new Float:vel[3];
     fm_get_user_velocity(id, vel);
 
-    g_usercmd_recordings[id][index][RECORD_VEL_X] = vel[0];
-    g_usercmd_recordings[id][index][RECORD_VEL_Y] = vel[1];
-    g_usercmd_recordings[id][index][RECORD_VEL_Z] = vel[2];
+    g_usercmd_recordings[id][index][RECORD_VEL_X] = _:vel[0];
+    g_usercmd_recordings[id][index][RECORD_VEL_Y] = _:vel[1];
+    g_usercmd_recordings[id][index][RECORD_VEL_Z] = _:vel[2];
 
     new Float:vec_temp[3];
 
     entity_get_vector(id, EV_VEC_vuser1, vec_temp);
-    g_usercmd_recordings[id][index][RECORD_VEC_USER1_X] = vec_temp[0];
-    g_usercmd_recordings[id][index][RECORD_VEC_USER1_Y] = vec_temp[1];
-    g_usercmd_recordings[id][index][RECORD_VEC_USER1_Z] = vec_temp[2];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER1_X] = _:vec_temp[0];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER1_Y] = _:vec_temp[1];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER1_Z] = _:vec_temp[2];
 
     entity_get_vector(id, EV_VEC_vuser2, vec_temp);
-    g_usercmd_recordings[id][index][RECORD_VEC_USER2_X] = vec_temp[0];
-    g_usercmd_recordings[id][index][RECORD_VEC_USER2_Y] = vec_temp[1];
-    g_usercmd_recordings[id][index][RECORD_VEC_USER2_Z] = vec_temp[2];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER2_X] = _:vec_temp[0];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER2_Y] = _:vec_temp[1];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER2_Z] = _:vec_temp[2];
 
     entity_get_vector(id, EV_VEC_vuser3, vec_temp);
-    g_usercmd_recordings[id][index][RECORD_VEC_USER3_X] = vec_temp[0];
-    g_usercmd_recordings[id][index][RECORD_VEC_USER3_Y] = vec_temp[1];
-    g_usercmd_recordings[id][index][RECORD_VEC_USER3_Z] = vec_temp[2];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER3_X] = _:vec_temp[0];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER3_Y] = _:vec_temp[1];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER3_Z] = _:vec_temp[2];
 
     entity_get_vector(id, EV_VEC_vuser4, vec_temp);
-    g_usercmd_recordings[id][index][RECORD_VEC_USER4_X] = vec_temp[0];
-    g_usercmd_recordings[id][index][RECORD_VEC_USER4_Y] = vec_temp[1];
-    g_usercmd_recordings[id][index][RECORD_VEC_USER4_Z] = vec_temp[2];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER4_X] = _:vec_temp[0];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER4_Y] = _:vec_temp[1];
+    g_usercmd_recordings[id][index][RECORD_VEC_USER4_Z] = _:vec_temp[2];
 
-    g_usercmd_recordings[id][index][RECORD_FL_USER1] = entity_get_float(id, EV_FL_fuser1);
-    g_usercmd_recordings[id][index][RECORD_FL_USER2] = entity_get_float(id, EV_FL_fuser2);
-    g_usercmd_recordings[id][index][RECORD_FL_USER3] = entity_get_float(id, EV_FL_fuser3);
-    g_usercmd_recordings[id][index][RECORD_FL_USER4] = entity_get_float(id, EV_FL_fuser4);
-
-
+    g_usercmd_recordings[id][index][RECORD_FL_USER1] = _:entity_get_float(id, EV_FL_fuser1);
+    g_usercmd_recordings[id][index][RECORD_FL_USER2] = _:entity_get_float(id, EV_FL_fuser2);
+    g_usercmd_recordings[id][index][RECORD_FL_USER3] = _:entity_get_float(id, EV_FL_fuser3);
+    g_usercmd_recordings[id][index][RECORD_FL_USER4] = _:entity_get_float(id, EV_FL_fuser4);
 
     g_recording_durations[id] = index + 1;
 }
@@ -472,12 +579,25 @@ public ReplayEntity(id, bool:in_post) {
         entity_set_vector(id, EV_VEC_origin, g_recording_start_positions[id]);
     }
 
-    new index = g_current_replay_indices[id];
-    if (index >= MAX_RECORDING_DURATION || index >= g_recording_durations[id]) {
+    new original_index = g_current_replay_indices[id];
+    if (original_index >= MAX_RECORDING_DURATION || original_index >= g_recording_durations[id]) {
         client_print(id, print_chat, "Replay finished!");
         g_is_replaying[id] = false;
         g_replay_start_ticks[id] = 0;
         return;
+    }
+
+    new index = original_index;
+
+    if (IsReplayingReverse(id)) {
+        index = g_recording_durations[id] - original_index - 1;
+
+        if (index < 0) {
+            client_print(id, print_chat, "Replay finished!");
+            g_is_replaying[id] = false;
+            g_replay_start_ticks[id] = 0;
+            return;
+        }
     }
 
     /*set_uc(uc_handle, UC_Buttons, g_usercmd_recordings[id][index][0]);
@@ -490,31 +610,31 @@ public ReplayEntity(id, bool:in_post) {
     entity_set_int(id, EV_INT_flags, g_usercmd_recordings[id][index][RECORD_ENT_FLAGS]);
 
     new Float:movedir[3];
-    movedir[0] = g_usercmd_recordings[id][index][RECORD_MOVEDIR_X];
-    movedir[1] = g_usercmd_recordings[id][index][RECORD_MOVEDIR_Y];
-    movedir[2] = g_usercmd_recordings[id][index][RECORD_MOVEDIR_Z];
+    movedir[0] = Float:g_usercmd_recordings[id][index][RECORD_MOVEDIR_X];
+    movedir[1] = Float:g_usercmd_recordings[id][index][RECORD_MOVEDIR_Y];
+    movedir[2] = Float:g_usercmd_recordings[id][index][RECORD_MOVEDIR_Z];
 
     entity_set_vector(id, EV_VEC_movedir, movedir);
 
     new Float:angles[3];
-    angles[0] = g_usercmd_recordings[id][index][RECORD_ANGLES_X];
-    angles[1] = g_usercmd_recordings[id][index][RECORD_ANGLES_Y];
-    angles[2] = g_usercmd_recordings[id][index][RECORD_ANGLES_Z];
+    angles[0] = Float:g_usercmd_recordings[id][index][RECORD_ANGLES_X];
+    angles[1] = Float:g_usercmd_recordings[id][index][RECORD_ANGLES_Y];
+    angles[2] = Float:g_usercmd_recordings[id][index][RECORD_ANGLES_Z];
 
 
     //set_uc(uc_handle, UC_ViewAngles, angles);
     entity_set_vector(id, EV_VEC_angles, angles);
 
-    angles[0] = g_usercmd_recordings[id][index][RECORD_V_ANGLE_X];
-    angles[1] = g_usercmd_recordings[id][index][RECORD_V_ANGLE_Y];
-    angles[2] = g_usercmd_recordings[id][index][RECORD_V_ANGLE_Z];
+    angles[0] = Float:g_usercmd_recordings[id][index][RECORD_V_ANGLE_X];
+    angles[1] = Float:g_usercmd_recordings[id][index][RECORD_V_ANGLE_Y];
+    angles[2] = Float:g_usercmd_recordings[id][index][RECORD_V_ANGLE_Z];
     entity_set_vector(id, EV_VEC_v_angle, angles);
 
     // Send the SVC_SETANGLE message
     // We dont set EV_INT_fixangle because it causes bugs
-    if (!in_post) {
-        new pitch = floatmul(angles[0] + 360.0, 65536.0 / 360.0);
-        new yaw = floatmul(angles[1] + 360.0, 65536.0 / 360.0);
+    if (!in_post && !g_replay_pause[id]) {
+        new Float:pitch = floatmul(angles[0] + 360.0, 65536.0 / 360.0);
+        new Float:yaw = floatmul(angles[1] + 360.0, 65536.0 / 360.0);
         new short_pitch = floatround(pitch);
         new short_yaw = floatround(yaw);
 
@@ -526,47 +646,49 @@ public ReplayEntity(id, bool:in_post) {
     }
 
     new Float:pos[3];
-    pos[0] = g_usercmd_recordings[id][index][RECORD_POS_X];
-    pos[1] = g_usercmd_recordings[id][index][RECORD_POS_Y];
-    pos[2] = g_usercmd_recordings[id][index][RECORD_POS_Z];
+    pos[0] = Float:g_usercmd_recordings[id][index][RECORD_POS_X];
+    pos[1] = Float:g_usercmd_recordings[id][index][RECORD_POS_Y];
+    pos[2] = Float:g_usercmd_recordings[id][index][RECORD_POS_Z];
 
     entity_set_vector(id, EV_VEC_origin, pos);
 
     new Float:vel[3];
-    vel[0] = g_usercmd_recordings[id][index][RECORD_VEL_X];
-    vel[1] = g_usercmd_recordings[id][index][RECORD_VEL_Y];
-    vel[2] = g_usercmd_recordings[id][index][RECORD_VEL_Z];
+    vel[0] = Float:g_usercmd_recordings[id][index][RECORD_VEL_X];
+    vel[1] = Float:g_usercmd_recordings[id][index][RECORD_VEL_Y];
+    vel[2] = Float:g_usercmd_recordings[id][index][RECORD_VEL_Z];
 
     fm_set_user_velocity(id, vel);
 
-    new vec_temp[3];
+    new Float:vec_temp[3];
 
-    vec_temp[0] = g_usercmd_recordings[id][index][RECORD_VEC_USER1_X];
-    vec_temp[1] = g_usercmd_recordings[id][index][RECORD_VEC_USER1_Y];
-    vec_temp[2] = g_usercmd_recordings[id][index][RECORD_VEC_USER1_Z];
+    vec_temp[0] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER1_X];
+    vec_temp[1] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER1_Y];
+    vec_temp[2] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER1_Z];
     entity_set_vector(id, EV_VEC_vuser1, vec_temp);
 
-    vec_temp[0] = g_usercmd_recordings[id][index][RECORD_VEC_USER2_X];
-    vec_temp[1] = g_usercmd_recordings[id][index][RECORD_VEC_USER2_Y];
-    vec_temp[2] = g_usercmd_recordings[id][index][RECORD_VEC_USER2_Z];
+    vec_temp[0] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER2_X];
+    vec_temp[1] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER2_Y];
+    vec_temp[2] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER2_Z];
     entity_set_vector(id, EV_VEC_vuser2, vec_temp);
 
-    vec_temp[0] = g_usercmd_recordings[id][index][RECORD_VEC_USER3_X];
-    vec_temp[1] = g_usercmd_recordings[id][index][RECORD_VEC_USER3_Y];
-    vec_temp[2] = g_usercmd_recordings[id][index][RECORD_VEC_USER3_Z];
+    vec_temp[0] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER3_X];
+    vec_temp[1] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER3_Y];
+    vec_temp[2] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER3_Z];
     entity_set_vector(id, EV_VEC_vuser3, vec_temp);
 
-    vec_temp[0] = g_usercmd_recordings[id][index][RECORD_VEC_USER4_X];
-    vec_temp[1] = g_usercmd_recordings[id][index][RECORD_VEC_USER4_Y];
-    vec_temp[2] = g_usercmd_recordings[id][index][RECORD_VEC_USER4_Z];
+    vec_temp[0] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER4_X];
+    vec_temp[1] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER4_Y];
+    vec_temp[2] = Float:g_usercmd_recordings[id][index][RECORD_VEC_USER4_Z];
     entity_set_vector(id, EV_VEC_vuser4, vec_temp);
 
-    entity_set_float(id, EV_FL_fuser1, g_usercmd_recordings[id][index][RECORD_FL_USER1]);
-    entity_set_float(id, EV_FL_fuser2, g_usercmd_recordings[id][index][RECORD_FL_USER2]);
-    entity_set_float(id, EV_FL_fuser3, g_usercmd_recordings[id][index][RECORD_FL_USER3]);
-    entity_set_float(id, EV_FL_fuser4, g_usercmd_recordings[id][index][RECORD_FL_USER4]);
+    entity_set_float(id, EV_FL_fuser1, Float:g_usercmd_recordings[id][index][RECORD_FL_USER1]);
+    entity_set_float(id, EV_FL_fuser2, Float:g_usercmd_recordings[id][index][RECORD_FL_USER2]);
+    entity_set_float(id, EV_FL_fuser3, Float:g_usercmd_recordings[id][index][RECORD_FL_USER3]);
+    entity_set_float(id, EV_FL_fuser4, Float:g_usercmd_recordings[id][index][RECORD_FL_USER4]);
 
-    g_current_replay_indices[id] = index + 1;
+    if (!g_replay_pause[id]) {
+        g_current_replay_indices[id] = original_index + 1;
+    }
 }
 
 public CmdStart(id, cmd, random_seed) {
@@ -581,8 +703,9 @@ public CmdStart(id, cmd, random_seed) {
 
     new flags = pev(id, pev_flags)
     new bool:on_ground = (flags & FL_ONGROUND) != 0;
+    new bool:sliding = (flags & 0x4000) != 0;
 
-    if (buttons & IN_JUMP && on_ground) {
+    if (buttons & IN_JUMP && on_ground && !sliding) {
         new Float:vel[3] = {0.0, 0.0, 0.0};
         fm_get_user_velocity(id, vel);
 
@@ -604,6 +727,11 @@ public CmdStart(id, cmd, random_seed) {
             new velstr[64];
             format(velstr, charsmax(velstr), "Velocity: %.2f", veclen);
             client_print(id, print_chat, velstr);
+
+            new flagstr[64];
+            format(flagstr, charsmax(flagstr), "Flags: %x", flags);
+
+            client_print(id, print_chat, flagstr);
         }
     } else if (buttons & IN_JUMP && !on_ground && g_last_on_ground_state[id]) {
         if (g_speed_boost_enabled[id]) {
@@ -647,9 +775,6 @@ public PlayerPreThink(id) {
         return FMRES_IGNORED;
     }
 
-    // Testing
-    //entity_set_int(id, EV_INT_button, entity_get_int(id, EV_INT_button) & ~IN_JUMP);
-
     if (IsRecording(id)) {
         RecordEntity(id);
     } else if (IsReplaying(id)) {
@@ -666,7 +791,9 @@ public PlayerPostThink(id) {
 
     if (IsReplaying(id)) {
         if (g_current_replay_indices[id] > 0) {
-            g_current_replay_indices[id]--;
+            if (!g_replay_pause[id]) {
+                g_current_replay_indices[id]--;
+            }
 
             ReplayEntity(id, true);
         }
