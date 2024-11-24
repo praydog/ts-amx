@@ -63,6 +63,8 @@ new g_recording_durations[MAX_PLAYERS + 1];
 new g_current_replay_indices[MAX_PLAYERS + 1];
 new bool:g_replay_reverse[MAX_PLAYERS + 1];
 new bool:g_replay_pause[MAX_PLAYERS + 1];
+new Float:g_last_time_displayed_buttons[MAX_PLAYERS + 1];
+new g_last_replay_buttons[MAX_PLAYERS + 1];
 
 // This function is called when the plugin is loaded
 public plugin_init() {
@@ -605,9 +607,30 @@ public ReplayEntity(id, bool:in_post) {
     set_uc(uc_handle, UC_SideMove, g_usercmd_recordings[id][index][2]);
     set_uc(uc_handle, UC_UpMove, g_usercmd_recordings[id][index][3]);*/
 
-    entity_set_int(id, EV_INT_button, g_usercmd_recordings[id][index][RECORD_BUTTONS]);
+    new buttons = g_usercmd_recordings[id][index][RECORD_BUTTONS];
+
+    entity_set_int(id, EV_INT_button, buttons);
     entity_set_int(id, EV_INT_oldbuttons, g_usercmd_recordings[id][index][RECORD_OLD_BUTTONS]);
     entity_set_int(id, EV_INT_flags, g_usercmd_recordings[id][index][RECORD_ENT_FLAGS]);
+
+    if (g_last_replay_buttons[id] != buttons) {
+        new w_pressed = (buttons & IN_FORWARD) != 0;
+        new a_pressed = (buttons & IN_MOVELEFT) != 0;
+        new s_pressed = (buttons & IN_BACK) != 0;
+        new d_pressed = (buttons & IN_MOVERIGHT) != 0;
+
+        new keys[5];
+        format(keys, sizeof(keys), "%s%s%s%s",
+            a_pressed ? "A" : "_",
+            w_pressed ? "W" : "_",
+            s_pressed ? "S" : "_",
+            d_pressed ? "D" : "_");
+
+        set_hudmessage(255, 255, 255, 0.5, 0.6, 0, 0.1, 5.0, 0.0, 0.0, HUD_CHANNEL + 1);
+        show_hudmessage(id, keys);
+    }
+
+    g_last_replay_buttons[id] = buttons;
 
     new Float:movedir[3];
     movedir[0] = Float:g_usercmd_recordings[id][index][RECORD_MOVEDIR_X];
